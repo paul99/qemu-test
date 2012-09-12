@@ -1,6 +1,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -28,7 +29,8 @@ const int kLuiShift      = 16;
 
 const unsigned int kImm16Shift = 0;
 const unsigned int kImm16Bits  = 16;
-const unsigned int kImm26Mask    = ((1 << 26) - 1);
+const unsigned int kImm16Mask  = ((1 << kImm16Bits) - 1) << kImm16Shift;
+const unsigned int kImm26Mask  = ((1 << 26) - 1);
 
 unsigned int   J    =   ((0 << 3) + 2) << 26;
 unsigned int  JAL   =   ((0 << 3) + 3) << 26;
@@ -53,11 +55,11 @@ void FlushICache(void* start, size_t size) {
 
 }
 
+
 void initSetup(unsigned int* exec_buff) {
 
   unsigned int* address;
   unsigned int inst;
-  const int  kImm16Mask  = ((1 << kImm16Bits) - 1) << kImm16Shift;
 
   inst = ADDIU | ( 29  << kRsShift) | ( 29 << kRtShift)
       | ((-4) & kImm16Mask);
@@ -199,7 +201,7 @@ void ShuffleChain(void** buffers_list, int buffer_num, int seed)  {
       if(free_list[next_block] == 0 && index != next_block) {
         // Found unchained block.
         free_list[next_block] = 1;
-        //printf("buffer id: %x, chained index: %x\n", index, next_block);
+        // printf("buffer id: %x, chained index: %x\n", index, next_block);
         break;
       } else {
          probe += 1;
@@ -219,7 +221,7 @@ void ShuffleChain(void** buffers_list, int buffer_num, int seed)  {
 
  // Chain the next to the last block to the last fixed block.
   current_buffer = (unsigned int*) buffers_list[index];;
-  //printf("buffer id: %x, chained index: 7\n", index);
+  // printf("buffer id: %x, chained index: 7\n", index);
   address = (unsigned int*) buffers_list[buffer_num - 1];
   target_address = &address[0];
 
@@ -236,7 +238,6 @@ void ZapBlock(unsigned int* block, unsigned int sizeInBytes, unsigned int value)
   for(i=0; i < sizeInBytes/4; i++) {
      block[i] = value;
   }
-
 }
 
 void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int insertAtIndex) {
@@ -252,17 +253,23 @@ void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int 
   int index = 1;
   do {
     //Address from jal.
-    target_address =  0xf0000000 & (unsigned int)&current_buffer[PAGE_STRIDE - 1 ];
-    target_address = (unsigned int)target_address | ((current_buffer[PAGE_STRIDE - 1 ] & kImm26Mask) << 2);
+    target_address =  (unsigned int *)(0xf0000000 & (unsigned int)&current_buffer[PAGE_STRIDE - 1 ]);
+    target_address = (unsigned int *)((unsigned int)target_address |
+                                       ((current_buffer[PAGE_STRIDE - 1 ] & kImm26Mask) << 2));
     previous_target_buffer = current_buffer;
-    current_buffer = (unsigned int)target_address  &  (~(PAGE_SIZE - 1));
+    current_buffer = (unsigned int *)((unsigned int)target_address  &  (~(PAGE_SIZE - 1)));
     index++;
   } while ( index < insertAtIndex);
 
-  target_address = current_buffer[PAGE_STRIDE -1 ] & kImm26Mask;
+  target_address = (unsigned int *)(current_buffer[PAGE_STRIDE -1 ] & kImm26Mask);
   // Zap block with break instruction, this will provoke traps if prevoius block
   // is unchained correctly.
-  ZapBlock(current_buffer, 2 * PAGE_SIZE, 0x0037ab4d);
+  // ZapBlock(current_buffer, 2 * PAGE_SIZE, 0x0037ab4d);
+
+  // plind, try using a lw to 0 address to generate segfault.
+  unsigned int instr = LW | ( 0  << kRsShift) | ( 2 << kRtShift) | (4 & kImm16Mask);  // lw v0,4(zero)
+  ZapBlock(current_buffer, 2 * PAGE_SIZE, instr);
+
   FlushICache( (void*)current_buffer, 2 * PAGE_SIZE );
 
   *swap_buffer = current_buffer;
@@ -290,10 +297,11 @@ void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int 
 }
 
 int main () {
-
   void  (*exec)(void);
   void* buffer, *swap_buffer;
   void* buffer_list[8];
+
+  printf("dm qemu test, starting up ... \n");
 
   posix_memalign(&buffer, PAGE_SIZE, 8 * PAGE_SIZE);
   memset(buffer, 0, 8 * PAGE_SIZE );
@@ -309,7 +317,7 @@ int main () {
   //mprotect(buffer, 8 * PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC);
 
   int reps, iteration;
-  for(reps = 0; reps < PAGE_SIZE/4; reps++)
+  for(reps = 0; reps < PAGE_SIZE/4; reps++) {
     for(iteration = 0; iteration < PAGE_SIZE - 256; iteration++) {
       exec = (void (*)(void))buffer_list[0];
       (*exec)();
@@ -323,11 +331,14 @@ int main () {
           InsertNewBlock(buffer_list, 8, &swap_buffer, 1+ iteration % 6);
       }
       //modifyCode(exec_buff, iteration, reps);
-      printf("Iteration: %d\n", iteration);
+      if ((iteration % 1000) == 0) printf("reps: %3d Iteration: %d\n", reps, iteration);
+    }
   }
 
   FreeBuffers(buffer_list, 8);
   FreeBuffers(&swap_buffer, 1);
   free(buffer);
+  printf("dm qemu test, done.\n");
+
   return 0;
 }
