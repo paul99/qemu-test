@@ -318,7 +318,8 @@ int main () {
 
   int reps, iteration;
   for(reps = 0; reps < PAGE_SIZE/4; reps++) {
-    for(iteration = 0; iteration < PAGE_SIZE - 256; iteration++) {
+    // for(iteration = 0; iteration < PAGE_SIZE - 256; iteration++) {
+    for(iteration = 0; iteration < 1; iteration++) {
       exec = (void (*)(void))buffer_list[0];
       (*exec)();
 
@@ -328,6 +329,7 @@ int main () {
           // Cannot replace first (index 0) block and last block which
           // stores/restores ra to/from stack.
           // This is critical on qemu.
+          printf("plind: InsertNewBlock(buffer_list, 8, &swap_buffer, %d)\n", 1+ iteration % 6);
           InsertNewBlock(buffer_list, 8, &swap_buffer, 1+ iteration % 6);
       }
       //modifyCode(exec_buff, iteration, reps);
