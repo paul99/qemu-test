@@ -235,9 +235,18 @@ void ShuffleChain(void** buffers_list, int buffer_num, int seed)  {
 void ZapBlock(unsigned int* block, unsigned int sizeInBytes, unsigned int value) {
 
   unsigned int i;
-  for(i=0; i < sizeInBytes/4; i++) {
-     block[i] = value;
-  }
+  // Old loop zapped the whole block.
+  // for(i=0; i < sizeInBytes/4; i++) {
+  //    block[i] = value;
+  // }
+
+  // Try patching just first words and last words in block.
+  // Initially found that 256 words here will PASS, going to 260 words will FAIL.
+  // Later found that a single write @ 256 (1024 bytes in) caused the breakage,
+  // without all the intervening bytes. I also no longer patch end of the block.
+
+  block[0] = value;
+  block[256] = value;
 }
 
 void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int insertAtIndex) {
@@ -247,7 +256,15 @@ void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int 
   unsigned int inst;
 
   new_buffer = *swap_buffer;
-  memset(new_buffer, 0, 2 * PAGE_SIZE);
+
+  // plind, trying to avoid the big memset, clear just the words set in ZapBlock().
+  // memset(new_buffer, 0, 2 * PAGE_SIZE);
+
+  int *block = (int *) new_buffer;
+  block[0] = 0;
+  block[256] = 0;
+
+
   // Extract target address to the next block in chain from old block;
   current_buffer = (unsigned int*)buffer_list[0];
   int index = 1;
@@ -312,6 +329,7 @@ int main () {
 
   AllocateBuffers(buffer_list, 8);
   AllocateBuffers(&swap_buffer, 1);
+
   InitChain(buffer_list, 8);
   //initSetup(exec_buff);
   //mprotect(buffer, 8 * PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC);
@@ -323,14 +341,16 @@ int main () {
       exec = (void (*)(void))buffer_list[0];
       (*exec)();
 
-      ShuffleChain(buffer_list, 8, iteration);
+      // ShuffleChain(buffer_list, 8, iteration);
 
-      if( (reps + 4 )% 10 == 0) {
+      // if( (reps + 4 )% 10 == 0) {
+      if(reps > 0) {
           // Cannot replace first (index 0) block and last block which
           // stores/restores ra to/from stack.
           // This is critical on qemu.
           printf("plind: InsertNewBlock(buffer_list, 8, &swap_buffer, %d)\n", 1+ iteration % 6);
           InsertNewBlock(buffer_list, 8, &swap_buffer, 1+ iteration % 6);
+          printf("plind: the zapped swap_buffer: %p)\n", swap_buffer);
       }
       //modifyCode(exec_buff, iteration, reps);
       if ((iteration % 1000) == 0) printf("reps: %3d Iteration: %d\n", reps, iteration);
