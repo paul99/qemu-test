@@ -156,7 +156,7 @@ void InitChain(void** buffers_list, int buffer_num)  {
 
     current_buffer = (unsigned int*) buffers_list[buffer_index];
     next_buffer = (unsigned int*) buffers_list[buffer_index + 1];
-    address = &(next_buffer[256]);
+    address = &(next_buffer[0x0fc0 / 4]);  // Jump target offset into 4k page.
     inst =  (((unsigned int)address & 0x0fffffff) >> 2 ) | 0x0c000000;
     current_buffer[ PAGE_STRIDE - 1] = inst; // jal inserting at page boundary
     FlushICache( (void*)current_buffer, 2 * PAGE_SIZE);
@@ -245,8 +245,9 @@ void ZapBlock(unsigned int* block, unsigned int sizeInBytes, unsigned int value)
   // Later found that a single write @ 256 (1024 bytes in) caused the breakage,
   // without all the intervening bytes. I also no longer patch end of the block.
 
-  block[0] = value;
-  block[256] = value;
+  // block[0] = value;
+  // block[256] = value;
+  block[0x0fc0 / 4] = value;
 }
 
 void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int insertAtIndex) {
@@ -261,8 +262,8 @@ void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int 
   // memset(new_buffer, 0, 2 * PAGE_SIZE);
 
   int *block = (int *) new_buffer;
-  block[0] = 0;
-  block[256] = 0;
+  // block[0] = 0;
+  block[0x0fc0 / 4] = 0;
 
 
   // Extract target address to the next block in chain from old block;
@@ -278,7 +279,9 @@ void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int 
     index++;
   } while ( index < insertAtIndex);
 
-  target_address = (unsigned int *)(current_buffer[PAGE_STRIDE -1 ] & kImm26Mask);
+  target_address = (unsigned int *)((current_buffer[PAGE_STRIDE -1 ] & kImm26Mask) << 2);
+
+
   // Zap block with break instruction, this will provoke traps if prevoius block
   // is unchained correctly.
   // ZapBlock(current_buffer, 2 * PAGE_SIZE, 0x0037ab4d);
@@ -299,18 +302,25 @@ void InsertNewBlock(void** buffer_list, int buffer_num, void** swap_buffer, int 
 
   current_buffer = (unsigned int*) new_buffer;
   // Set up jump in new code block.
-  inst =  (unsigned int)target_address | 0x0c000000;
+  inst =  ((unsigned int)target_address >> 2) | 0x0c000000;
   current_buffer[PAGE_STRIDE - 1] = inst; // jal inserting at page boundary
+
   FlushICache( (void*)current_buffer, 2 * PAGE_SIZE);
 
+  printf("plind: NEW  block at index %d, addr: %p, has jump target addr: %p\n",
+         index, current_buffer, target_address);
+
   // Chain the new code block to previous block.
-  target_address = &current_buffer[0];
+  target_address = &current_buffer[0x0fc0 / 4];
 
   //printf("target address to new block: %p, current buffer: %p\n", target_address, previous_target_buffer);
   inst =  (((unsigned int)target_address & 0x0fffffff) >> 2 ) | 0x0c000000;
   previous_target_buffer[PAGE_STRIDE - 1] = inst; // jal inserting at page boundary
+
   FlushICache( (void*)&previous_target_buffer[PAGE_STRIDE - 1], sizeof(inst));
 
+  printf("plind: PREV block at index %d, addr: %p, has jump target addr: %p\n",
+         index - 1, previous_target_buffer, target_address);
 }
 
 int main () {
@@ -345,11 +355,12 @@ int main () {
 
       // if( (reps + 4 )% 10 == 0) {
       if(reps > 0) {
+          int insert_idx = 3;
           // Cannot replace first (index 0) block and last block which
           // stores/restores ra to/from stack.
           // This is critical on qemu.
-          printf("plind: InsertNewBlock(buffer_list, 8, &swap_buffer, %d)\n", 1+ iteration % 6);
-          InsertNewBlock(buffer_list, 8, &swap_buffer, 1+ iteration % 6);
+          printf("plind: InsertNewBlock(buffer_list, 8, &swap_buffer, %d)\n", insert_idx);
+          InsertNewBlock(buffer_list, 8, &swap_buffer, insert_idx);
           printf("plind: the zapped swap_buffer: %p)\n", swap_buffer);
       }
       //modifyCode(exec_buff, iteration, reps);
